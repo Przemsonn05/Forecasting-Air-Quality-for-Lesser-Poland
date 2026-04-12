@@ -516,6 +516,8 @@ def _api_post(endpoint: str, payload: dict) -> dict:
             return {"_error": str(exc)}
 
     if endpoint == "/explain":
+        if svc.lgbm is None:
+            return {"_error": "LightGBM model not loaded."}
         try:
             dt = pd.Timestamp(payload["forecast_date"])
             station_history = svc.get_station_history(payload.get("station_id", "MpKrakWadow"))
