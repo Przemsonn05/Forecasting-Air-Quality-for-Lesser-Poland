@@ -311,14 +311,14 @@ All metrics are computed on **back-transformed µg/m³ values** to be directly i
 
 ### Validation set results (2023)
 
-| Model | MAE (µg/m³) | RMSE (µg/m³) | SMAPE (%) | R² |
+| Model | MAE (µg/m³) | RMSE (µg/m³) | MAPE (%) | R² |
 |---|---|---|---|---|
-| **LightGBM** | **4.32** | **6.25** | **19.6** | **0.71** |
-| Naïve baseline | 6.60 | 9.63 | 29.7 | - |
-| SARIMAX | 11.5 | 16.8 | 29.1 | 0.71 |
-| ARIMA | 13.1 | 18.4 | 33.5 | 0.65 |
+| **LightGBM** | **4.21** | **6.09** | **20.32** | **0.73** |
+| SARIMAX | 6.05 | 9.08 | 28.61 | 0.39 |
+| ARIMA | 6.24 | 9.39 | 30.85 | 0.35 |
+| Prophet |	6.90 |	9.68 |	36.17% |	0.31 |
 
-LightGBM achieves the lowest MAE and RMSE on the validation set, outperforming the naïve baseline by ~35%. SARIMAX and ARIMA provide interpretable alternatives with reasonable accuracy.
+LightGBM achieves the lowest MAE and RMSE on the validation set, outperforming SARIMAX, ARIMA, and Prophet models. It provides the best metrics and an interpretable tool for forecasting PM10 levels, which are usually hard to predict, especially in heavily polluted, smog-prone Kraków.
 
 ### Exceedance classification metrics
 
@@ -336,7 +336,7 @@ For public-health use cases, **recall is prioritised**: missing a real smog day 
 
 ![Model metrics comparison](images/model_comparison_neutral.png)
 
-The model comparison bar chart presents the four core regression metrics — MAE, RMSE, SMAPE, and R² — for all evaluated models on the 2023 validation set, displayed side by side for direct comparison. LightGBM achieves the best result across every metric (MAE 4.32 µg/m³, RMSE 6.25 µg/m³, R² 0.71), outperforming the naïve persistence baseline by approximately 35% on MAE. SARIMAX, which incorporates exogenous weather variables, scores significantly better than the pure ARIMA model, demonstrating the value of meteorological covariates even within a linear statistical framework. The ARIMA baseline — trained on the Box-Cox series without external regressors — still outperforms naïve persistence on RMSE, confirming that even simple autocorrelation structure carries meaningful predictive information. Colour coding distinguishes each model across all metric panels, making it straightforward to assess relative strengths and weaknesses at a glance. The chart provides a regression-level sanity check: all three trained models surpass the persistence baseline, confirming that the engineered features and modelling choices add genuine forecasting value rather than merely fitting historical noise.
+The model comparison bar chart presents the four core regression metrics — MAE, RMSE, SMAPE, and R² — for all evaluated models on the 2023 validation set, displayed side by side for direct comparison. LightGBM achieves the best result across every metric (MAE 4.21 µg/m³, RMSE 6.09 µg/m³, R² 0.73), outperforming the naïve persistence baseline by approximately 35% on MAE. SARIMAX, which incorporates exogenous weather variables, scores significantly better than the pure ARIMA model, demonstrating the value of meteorological covariates even within a linear statistical framework. The ARIMA baseline — trained on the Box-Cox series without external regressors — still outperforms naïve persistence on RMSE, confirming that even simple autocorrelation structure carries meaningful predictive information. Colour coding distinguishes each model across all metric panels, making it straightforward to assess relative strengths and weaknesses at a glance. The chart provides a regression-level sanity check: all three trained models surpass the persistence baseline, confirming that the engineered features and modelling choices add genuine forecasting value rather than merely fitting historical noise.
 
 ---
 
@@ -532,7 +532,7 @@ python scripts/prepare_api_artifacts.py
 
 ### Summary
 
-This project delivers a complete, production-oriented PM10 forecasting pipeline - from raw GIOŚ Excel files to a live REST API and interactive multi-station dashboard. LightGBM achieves the best overall performance (MAE 4.32 µg/m³, R² 0.71 on the 2023 validation set), powered by a rich set of lag, rolling, weather, and interaction features engineered from domain knowledge. SARIMAX and ARIMA add interpretability and serve as useful comparison points.
+This project delivers a complete, production-oriented PM10 forecasting pipeline - from raw GIOŚ Excel files to a live REST API and interactive multi-station dashboard. LightGBM achieves the best overall performance (MAE 4.21 µg/m³, R² 0.73 on the 2023 validation set), powered by a rich set of lag, rolling, weather, and interaction features engineered from domain knowledge. SARIMAX and ARIMA add interpretability and serve as useful comparison points.
 
 ### Strengths
 
