@@ -70,11 +70,17 @@ def safe_inv_boxcox(
     clip_min: float = 0.0,
     clip_max: float = 500.0,
 ) -> np.ndarray:
-    """Invert a Box-Cox transform with clipping to avoid numerical overflow.
+    """Invert a Box-Cox transform with full NaN / inf protection.
 
-    The notebook applies Box-Cox directly to raw PM10 concentrations (no +1
-    offset) after filtering for strictly positive values.  This function
-    mirrors that by inverting without any additive offset.
+    ``scipy.special.inv_boxcox`` can return NaN or ±inf when the input falls
+    outside the analytic domain (e.g. ``(1 + lam·y)`` going negative for a
+    fractional lambda).  This helper pre-clips the input to a physically
+    plausible Box-Cox range and then post-sanitises the output so that a
+    caller downstream of a forecasting model never receives a silent NaN or
+    an exploding prediction.
+
+    The default bounds match Kraków PM10 reality: concentrations are
+    non-negative and almost always ≤ 500 µg/m³ (the all-time GIOŚ record).
 
     Parameters
     ----------
@@ -82,20 +88,19 @@ def safe_inv_boxcox(
         Transformed (Box-Cox scale) values to invert.
     lambda_bc:
         Lambda returned by ``scipy.stats.boxcox``.
-    clip_min:
-        Lower bound applied after inversion (default 0 — concentrations are
-        non-negative).
-    clip_max:
-        Upper bound applied after inversion to suppress exploding predictions
-        from extreme Box-Cox inputs.
+    clip_min, clip_max:
+        Final output bounds (default 0 and 500 µg/m³).
 
     Returns
     -------
     np.ndarray
-        Original-scale PM10 values in µg/m³.
+        Original-scale PM10 values in µg/m³, always finite and within
+        ``[clip_min, clip_max]``.
     """
     y = np.clip(np.asarray(values, dtype=float), -5.0, 50.0)
-    return np.clip(inv_boxcox(y, lambda_bc), clip_min, clip_max)
+    out = np.asarray(inv_boxcox(y, lambda_bc), dtype=float)
+    out = np.nan_to_num(out, nan=clip_min, posinf=clip_max, neginf=clip_min)
+    return np.clip(out, clip_min, clip_max)
 
 
 def inverse_boxcox_transform(values: np.ndarray, lambda_bc: float) -> np.ndarray:

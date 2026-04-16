@@ -404,7 +404,13 @@ def _optuna_search(
     n_trials: int = 50,
     early_stopping_rounds: int = 100,
 ) -> tuple[dict, int]:
-    """Run an Optuna MAE-minimisation study and return best params + n_estimators."""
+    """Run an Optuna MAE-minimisation study and return best params + n_estimators.
+
+    The best-trial ``n_estimators`` is attached to each trial via
+    ``trial.set_user_attr`` and retrieved from ``study.best_trial`` after
+    optimisation — a plain module-level list would only remember the *last*
+    trial executed, not the best one.
+    """
     try:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -412,8 +418,6 @@ def _optuna_search(
         raise ImportError(
             "Install optuna to use hyperparameter search: pip install optuna"
         ) from exc
-
-    best_n_estimators = [500]
 
     def objective(trial: optuna.Trial) -> float:
         p = {
@@ -438,12 +442,16 @@ def _optuna_search(
             eval_set=[(X_es, y_es)],
             callbacks=[lgb.early_stopping(early_stopping_rounds, verbose=False)],
         )
-        best_n_estimators[0] = mdl.best_iteration_
+
+        trial.set_user_attr("best_n", int(mdl.best_iteration_ or 500))
+
         preds = mdl.predict(X_es)
         return float(np.mean(np.abs(y_es.values - preds)))
 
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    best_n = int(study.best_trial.user_attrs.get("best_n", 500))
 
     best_params = {
         **study.best_params,
@@ -453,5 +461,8 @@ def _optuna_search(
         "n_jobs": -1,
         "verbosity": -1,
     }
-    logger.info("Optuna best MAE=%.4f  params=%s", study.best_value, study.best_params)
-    return best_params, best_n_estimators[0]
+    logger.info(
+        "Optuna best MAE=%.4f  best_n=%d  params=%s",
+        study.best_value, best_n, study.best_params,
+    )
+    return best_params, best_n
