@@ -7,12 +7,13 @@
 #   docker-compose logs -f backend     # stream backend logs
 #   docker-compose down                # stop & remove containers
 #
-# Pre-requisite: models/ directory must contain the artefacts:
-#   lgbm_model.joblib  arima_model.pkl  sarimax_model.pkl  lambda_bc.pkl
-#   (optionally: recent_history.pkl  scaler.pkl  kmeans_model.pkl  metrics.pkl)
-#
-# To regenerate artefacts:
+# Pre-requisite: models/ directory must contain all artefacts produced by:
 #   python scripts/prepare_api_artifacts.py   (run on host, not in Docker)
+#
+# Produced artefacts:
+#   lgbm_model.joblib  arima_model.pkl  sarimax_model.pkl
+#   lambda_bc.pkl  scaler.pkl  kmeans_model.pkl
+#   recent_history.pkl  metrics.pkl  validation_results.pkl
 # =============================================================================
 
 services:

@@ -186,10 +186,26 @@ async def predict(
 async def metrics(
     svc: ModelService = Depends(_model_svc),
 ) -> MetricsResponse:
+    if not svc.metrics:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Metrics are not available. "
+                "Run `python scripts/prepare_api_artifacts.py` to generate "
+                "metrics.pkl before querying /metrics."
+            ),
+        )
+
     result: dict[str, ModelMetrics] = {}
     for name, m in svc.metrics.items():
         result[name] = ModelMetrics(
-            mae=m["mae"], rmse=m["rmse"], smape=m["smape"], r2=m.get("r2")
+            mae=m["mae"],
+            rmse=m["rmse"],
+            smape=m["smape"],
+            r2=m.get("r2"),
+            exc_precision=m.get("exc_precision"),
+            exc_recall=m.get("exc_recall"),
+            exc_f1=m.get("exc_f1"),
         )
 
     best = min(result, key=lambda k: result[k].mae)

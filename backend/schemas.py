@@ -67,10 +67,14 @@ class ModelMetrics(BaseModel):
     rmse: float
     smape: float
     r2: Optional[float] = None
+    exc_precision: Optional[float] = None
+    exc_recall: Optional[float] = None
+    exc_f1: Optional[float] = None
+
 
 class MetricsResponse(BaseModel):
-    metrics: dict[str, ModelMetrics]  
-    best_model: str                    
+    metrics: dict[str, ModelMetrics]
+    best_model: str
 
 class ExplainRequest(BaseModel):
     model_name: str

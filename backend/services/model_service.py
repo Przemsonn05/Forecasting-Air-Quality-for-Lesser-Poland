@@ -58,10 +58,9 @@ def _load_pkl(path: Path):
 
 
 def _safe_inv_boxcox(values: np.ndarray, lam: float) -> np.ndarray:
-    """Invert Box-Cox transform; clip to physical PM10 range [0, 500]."""
-    from scipy.special import inv_boxcox
-    arr = np.clip(np.asarray(values, dtype=float), -5.0, 50.0)
-    return np.clip(inv_boxcox(arr, lam), 0.0, 500.0)
+    """Thin re-export of :func:`src.utils.safe_inv_boxcox` to keep the old import path."""
+    from src.utils import safe_inv_boxcox
+    return safe_inv_boxcox(values, lam)
 
 
 def _pm10_level(pm10: float) -> str:
@@ -289,6 +288,41 @@ def _heuristic_regime(temp_avg: float, wind_max: float, is_heat: int) -> int:
         return 2
     return 1
 
+
+def _extend_history(
+    history: pd.DataFrame,
+    weather: dict,
+    raw_bc: float,
+    pm10: float,
+    dt: pd.Timestamp,
+) -> pd.DataFrame:
+    """Append a synthetic history row for the next day's LightGBM forecast.
+
+    Inherits the previous row's schema so all columns expected by
+    :func:`_compute_lgbm_features` are present; overwrites the few columns
+    that change day-to-day (target PM10, its Box-Cox form, and weather if
+    supplied).  Auxiliary stations are held at their last observed value
+    (persistence) — a sensible default when no new sensor reading is yet
+    available.
+    """
+    last = history.iloc[-1].copy()
+
+    last["PM10_transformed"] = raw_bc
+    if _TARGET_STATION in history.columns:
+        last[_TARGET_STATION] = pm10
+
+    for key, value in weather.items():
+        if key in history.columns and value is not None:
+            last[key] = value
+
+    if isinstance(history.index, pd.DatetimeIndex):
+        new_idx = history.index[-1] + pd.Timedelta(days=1)
+    else:
+        new_idx = dt
+
+    new_row = pd.DataFrame([last.values], columns=history.columns, index=[new_idx])
+    return pd.concat([history, new_row])
+
 class ModelService:
     """Singleton that loads and exposes all model artefacts."""
 
@@ -321,7 +355,11 @@ class ModelService:
         raw_val = _load_pkl(_VALIDATION_PATH)
         self.validation_results: Optional[dict] = raw_val if isinstance(raw_val, dict) else None
 
-        self._fill_default_metrics()
+        if not self.metrics:
+            logger.warning(
+                "metrics.pkl not found or empty — /metrics endpoint will return 503. "
+                "Run `python scripts/prepare_api_artifacts.py` to generate metrics."
+            )
 
         avail = [n for n, m in [
             ("LightGBM", self.lgbm), ("ARIMA", self.arima), ("SARIMAX", self.sarimax)
@@ -329,18 +367,6 @@ class ModelService:
         logger.info("Available models: %s | lambda_bc=%.4f", avail, self.lambda_bc)
 
         self._loaded = True
-
-    def _fill_default_metrics(self) -> None:
-        """Use placeholder metrics if the pkl isn't present yet."""
-        defaults = {
-            "LightGBM": {"mae": 8.2,  "rmse": 12.1, "smape": 21.3, "r2": 0.83},
-            "SARIMAX":  {"mae": 11.5, "rmse": 16.8, "smape": 29.1, "r2": 0.71},
-            "ARIMA":    {"mae": 13.1, "rmse": 18.4, "smape": 33.5, "r2": 0.65},
-            "Naïve":    {"mae": 18.7, "rmse": 25.2, "smape": 45.6, "r2": 0.40},
-        }
-        for model, vals in defaults.items():
-            if model not in self.metrics:
-                self.metrics[model] = vals
 
     def predict(
         self,
@@ -397,16 +423,27 @@ class ModelService:
         horizon: int,
         history: Optional[pd.DataFrame] = None,
     ) -> tuple[list[float], None, None]:
+        """Multi-day LightGBM forecast with proper history extension.
+
+        After each one-step prediction the ``history`` DataFrame is extended
+        by one day: the just-predicted Box-Cox value becomes the new lag-1,
+        the back-transformed µg/m³ value is written into the target station's
+        raw column, auxiliary stations are held at their last observed value
+        (persistence), and the caller's weather dict is treated as a
+        persistence assumption for the whole horizon.  This preserves the
+        raw-PM10 + weather schema that :func:`_compute_lgbm_features`
+        expects, which the previous implementation did not.
+        """
         if self.lgbm is None:
             raise RuntimeError("LightGBM model not loaded")
 
-        preds = []
         history = history.copy() if history is not None else None
+        preds: list[float] = []
 
         for day_offset in range(horizon):
             dt = pd.Timestamp(forecast_date) + pd.Timedelta(days=day_offset)
-            X  = _compute_lgbm_features(weather, dt, history, self.lambda_bc)
 
+            X = _compute_lgbm_features(weather, dt, history, self.lambda_bc)
             expected = self.lgbm.feature_name_
             for col in expected:
                 if col not in X.columns:
@@ -417,10 +454,8 @@ class ModelService:
             pm10 = float(_safe_inv_boxcox(np.array([raw]), self.lambda_bc)[0])
             preds.append(pm10)
 
-            if history is not None and horizon > 1:
-                new_row = X.copy()
-                new_row["PM10_transformed"] = raw
-                history = pd.concat([history, new_row], ignore_index=True)
+            if day_offset + 1 < horizon and history is not None and len(history) > 0:
+                history = _extend_history(history, weather, raw, pm10, dt)
 
         return preds, None, None
 

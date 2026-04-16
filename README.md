@@ -43,12 +43,13 @@ This project builds a **production-ready forecasting system** that predicts next
 
 | Layer | Technology |
 |---|---|
-| ML pipeline | Jupyter Notebook + modular `src/` package |
+| ML pipeline | Modular `src/` package + CLI (`main.py`, `scripts/prepare_api_artifacts.py`) |
 | Models | LightGBM, SARIMAX, Prophet, ARIMA |
 | Explainability | SHAP (SHapley Additive exPlanations) |
 | REST API | FastAPI + Uvicorn |
 | Dashboard | Streamlit ("AirPulse Kraków") |
 | Containerisation | Docker + Docker Compose |
+| Testing | pytest (unit tests for preprocessing, feature engineering, utils) |
 
 ---
 
@@ -56,13 +57,11 @@ This project builds a **production-ready forecasting system** that predicts next
 
 ```
 .
-├── notebooks/
-│   └── air_quality_forecast.ipynb   # Main analysis and modelling notebook
-├── src/                             # Modularised pipeline (extracted from notebook)
+├── src/                             # Modular ML pipeline
 │   ├── data_loading.py              # PM10 Excel ingestion + Open-Meteo weather fetch
-│   ├── data_preprocessing.py        # Gap imputation, weather merge
+│   ├── data_preprocessing.py        # Gap imputation (short-gap interp, long-gap NaN + flag)
 │   ├── feature_engineering.py       # Full feature pipeline (Box-Cox, lags, rolling, etc.)
-│   ├── models.py                    # ARIMA, SARIMAX, LightGBM training
+│   ├── models.py                    # ARIMA, SARIMAX, Prophet, LightGBM training
 │   ├── evaluation.py                # Metrics, plots, exceedance analysis
 │   ├── eda.py                       # EDA plots
 │   ├── config.py                    # Training constants (stations, dates, hyperparams)
@@ -79,13 +78,14 @@ This project builds a **production-ready forecasting system** that predicts next
 ├── config/
 │   └── config.py                    # Shared runtime config (API host, stations, thresholds, colours)
 ├── scripts/
-│   └── prepare_api_artifacts.py     # One-off: train models and serialise → models/
-├── models/                          # Serialised artefacts (*.pkl, *.joblib)
-├── data/                            # Raw yearly PM10 Excel files (2019–2024)
-├── images/                          # All generated plots
+│   └── prepare_api_artifacts.py     # End-to-end: train all models + serialise every artefact
+├── tests/                           # pytest suite (feature-engineering, preprocessing, utils, …)
+├── models/                          # Serialised artefacts (*.pkl, *.joblib) – produced by the script
+├── data/                            # Raw yearly PM10 Excel files (2019–2024) – not in git
+├── images/                          # Generated plots
 ├── docker-compose.yml
 ├── requirements.txt
-└── main.py                          # CLI entry-point for the full pipeline
+└── main.py                          # CLI entry-point for the training + evaluation pipeline
 ```
 
 ### Component interaction
@@ -297,16 +297,16 @@ This section trains and compares four distinct forecasting approaches on the sam
 A gradient-boosted decision tree model operating on the full 40+ engineered feature set.
 
 - **Why:** Handles non-linear interactions, missing values, and heteroscedastic targets natively; fastest to train; supports SHAP
-- **Training:** Hyperparameters optimised via a 50-trial Optuna search with 3-fold `TimeSeriesSplit` cross-validation; early stopping on a chronological 15% holdout of training data (`LGBM_ES_FRACTION = 0.15`); 3 000 estimators max; L1 (MAE) loss objective for robustness against outliers
+- **Training:** Optional 50-trial Optuna search over `learning_rate`, `num_leaves`, regularisation and bagging fractions; each trial is evaluated on a chronological 15% early-stopping holdout of the training set (`LGBM_ES_FRACTION = 0.15`); the final model is refit on the full training set with the best-trial `n_estimators` carried over; 3 000 estimators max; L1 (MAE) loss objective for robustness against outliers
 - **Target:** Box-Cox-transformed PM10; predictions are back-transformed at evaluation time
 - **Split:** Strict time-series split - no shuffling; train ≤ 2022-12-31, val = 2023
 
 ### SARIMAX (statistical baseline with weather)
 
-Seasonal ARIMA with exogenous regressors, with a weekly seasonal component `(1, 0, 1, 7)`.
+Seasonal ARIMA with exogenous regressors and a weekly seasonality (`m=7`), with `order` and `seasonal_order` auto-selected by `pmdarima.auto_arima` at training time.
 
 - **Why:** Interpretable; captures linear ARIMA dynamics explicitly; exogenous weather variables (`temp_avg`, `wind_max`, `is_heating_season`, `is_calm_wind`, `hdd_calm`, `rain_3d_sum`, `inversion_proxy`) are included as regressors
-- **Training:** Walk-forward validation with full SARIMAX refit every 30 steps; exogenous features are standardised on the training set only
+- **Training:** Walk-forward validation with full SARIMAX refit every `REFIT_EVERY = 7` steps; exogenous features are standardised with a `StandardScaler` fitted on the training set only (same scaler is persisted for the API)
 - **Confidence intervals:** Available from the SARIMAX state-space covariance
 
 ### Prophet (additive decomposition model)
@@ -314,16 +314,16 @@ Seasonal ARIMA with exogenous regressors, with a weekly seasonal component `(1, 
 Meta's Prophet decomposes the time series into **trend + seasonality + holidays** and supports additional regressors.
 
 - **Why:** Built-in yearly and weekly seasonality, Polish public holidays via `add_country_holidays('PL')`, and Fourier-based seasonal decomposition that smoothly captures recurring patterns with minimal hyperparameter tuning
-- **Training:** Trained on Box-Cox-transformed PM10 for consistency with the target scale; seven meteorological regressors (same as SARIMAX) plus a 7-day rolling Box-Cox lag are included via `add_regressor()`; additive seasonality mode; `seasonality_prior_scale=10`; `interval_width=0.90`
+- **Training:** Trained on Box-Cox-transformed PM10 for consistency with the target scale; seven meteorological regressors (same as SARIMAX) plus a 7-day rolling Box-Cox lag are included via `add_regressor()`; multiplicative seasonality mode; `changepoint_prior_scale=0.05`; Prophet's default `interval_width`
 - **Strength:** Captures the broad seasonal arc smoothly; well-suited for trend and seasonality extraction
 - **Limitation:** Produces smoother forecasts that are less reactive to day-to-day fluctuations compared to autoregressive models; tends to underestimate sudden meteorological-driven spikes
 
 ### ARIMA (pure time-series baseline)
 
-A non-seasonal ARIMA fitted on the Box-Cox series, order `(2, 0, 2)` selected by ADF stationarity test + `auto_arima`.
+A non-seasonal ARIMA fitted on the Box-Cox series; integration order `d` is chosen from the ADF stationarity test and the remaining `(p, q)` order is selected by `pmdarima.auto_arima`.
 
 - **Why:** Serves as a reference point for how much is gained by adding weather covariates and richer features
-- **Walk-forward:** Full refit every 30 steps, with 90% prediction intervals
+- **Walk-forward:** Full refit every `REFIT_EVERY = 7` steps, with 90% prediction intervals
 
 ### Naïve persistence baseline
 
@@ -468,8 +468,8 @@ The **AirPulse Kraków** dashboard (`frontend/app.py`) is a dark-themed interact
 ### Sidebar controls
 
 - **Monitoring Station** - dropdown listing all GIOŚ stations detected in the data (up to 7 Kraków stations); the map and forecast update accordingly
-- **Forecasting Model** - `LightGBM`, `SARIMAX`, `ARIMA` or `Prophet` with a brief description of each
-- **Forecast Horizon** - 1 day ahead
+- **Forecasting Model** - `LightGBM`, `SARIMAX`, or `ARIMA` (served by the API); Prophet is used during training and comparison but is not exposed through the live forecast endpoint
+- **Forecast Horizon** - 1–3 days ahead
 - **Forecast Date** - today + 1 day by default
 - **Live Weather** - current conditions fetched automatically from Open-Meteo (temperature, humidity, wind, pressure, rain); a "Refresh Weather" button clears the cache
 - **API Status** - live indicator showing which models are loaded in the backend
@@ -643,19 +643,23 @@ This project delivers a complete, production-oriented PM10 forecasting pipeline 
 
 ### Option A - Docker (recommended)
 
-**Requirements:** Docker Desktop, model artefacts in `models/`
+**Requirements:** Docker Desktop, raw PM10 Excel files in `data/`, Python 3.11+ on the host.
 
 ```bash
-# 1. Generate model artefacts (run once, on host)
+# 1. Install host-side training deps (needed for the end-to-end script)
+pip install -r requirements.txt
+
+# 2. Train every model and serialise every artefact into models/
+#    (LightGBM + ARIMA + SARIMAX + scaler + KMeans + lambda + metrics + history)
 python scripts/prepare_api_artifacts.py
 
-# 2. Start both services
+# 3. Start both services
 docker-compose up --build
 
-# 3. Open the dashboard
+# 4. Open the dashboard
 #    http://localhost:8501
 
-# 4. Explore the API
+# 5. Explore the API
 #    http://localhost:8000/docs
 ```
 
@@ -674,10 +678,12 @@ docker-compose down
 pip install -r requirements.txt
 ```
 
-**2. Generate model artefacts**
+**2. Train all models and generate API artefacts**
 
 ```bash
-python scripts/prepare_api_artifacts.py
+python scripts/prepare_api_artifacts.py                 # train everything
+python scripts/prepare_api_artifacts.py --optuna        # + Optuna tuning (slow)
+python scripts/prepare_api_artifacts.py --models lgbm   # train a subset
 ```
 
 **3. Start the backend**
@@ -692,10 +698,18 @@ uvicorn backend.api:app --reload --port 8000
 streamlit run frontend/app.py
 ```
 
-**5. (Optional) Run the full pipeline notebook**
+**5. (Optional) Run the CLI pipeline end-to-end (plots + metrics, no API artefacts)**
 
 ```bash
-jupyter lab notebooks/air_quality_forecast.ipynb
+python main.py                  # all models + EDA
+python main.py --skip-eda       # skip plots
+python main.py --models lgbm    # single model
+```
+
+**6. Run the test suite**
+
+```bash
+pytest -q
 ```
 
 ---
