@@ -22,6 +22,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -68,7 +70,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    # allow_origins=["*"] is intentional for this public demo deployment.
+    # In a production setup this should be restricted to specific origins.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -226,7 +230,7 @@ async def explain(
         raise HTTPException(status_code=503, detail="LightGBM model not loaded.")
 
     weather = _weather_dict(req.weather)
-    dt = import_pd().Timestamp(req.forecast_date)
+    dt = pd.Timestamp(req.forecast_date)
     station_history = svc.get_station_history(req.station_id)
     X  = _compute_lgbm_features(weather, dt, station_history, svc.lambda_bc)
 
@@ -255,7 +259,7 @@ async def interpret(
     contributions: list[dict] = []
     if svc.lgbm is not None:
         try:
-            dt = import_pd().Timestamp(req.forecast_date)
+            dt = pd.Timestamp(req.forecast_date)
             station_history = svc.get_station_history(req.station_id)
             X  = _compute_lgbm_features(weather, dt, station_history, svc.lambda_bc)
             for col in svc.lgbm.feature_name_:
@@ -276,7 +280,3 @@ async def interpret(
     )
 
     return InterpretResponse(**result)
-
-def import_pd():
-    import pandas as pd
-    return pd
